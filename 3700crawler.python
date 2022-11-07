@@ -3,7 +3,7 @@
 import argparse
 import socket
 
-DEFAULT_SERVER = "project5.3700.network"
+DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
 
 class Crawler:
