@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+
+import sys, select, argparse, socket, ssl
+from queue import Queue
+from html.parser import HTMLParser
+
+DEFAULT_SERVER = "proj5.3700.network"
+DEFAULT_PORT = 443
+
+# TODO: get rid of duplicate flags (don't revisit pages -- fix loops)
+# TODO: clean up code (storing current response; open up possibility for multithreading)
+# TODO: fix request headers (keep-alive, etc.)
+# TODO: fix print to terminal (stdout flags only)
+# TODO: try not to hard code parsing 
+# TODO: add error-checking
+# TODO: special login GET request --> dynamic requests
+# TODO: handle other response codes
+
+# STATUS CODES
+OK = 'HTTP/1.1 200 OK'
+BAD_REQUEST = 'HTTP/1.1 400 Bad Request'
+FOUND = 'HTTP/1.1 302 Found'
+FORBIDDEN = 'HTTP/1.1 403 Forbidden'
+NOT_FOUND = 'HTTP/1.1 404 Not Found'
+SERVICE_UNAVAILABLE = 'HTTP/1.1 503 Service Unavailable'
+
+class Crawler:
+    
+    # Currently only handles one URL and response at a time
+    def __init__(self, args):
+        self.server = args.server
+        self.port = args.port
+        self.username = args.username
+        self.password = args.password
+
+        self.secure_socket = None
+        self.visited = ['/accounts/logout/']
+        self.frontier = []
+        self.flags = []
+
+        self.sessionID = ''
+        self.csrftoken = ''
+        self.csrfmiddlewaretoken = ''
+
+        self.current_url = ''
+        self.current_status = ''
+        self.current_headers = {}
+        self.current_body = ''
+    
+    # OPEN AND CONNECT OVER TLS TCP SOCKET
+    def open_secure_socket(self):
+        # CREATE SOCKET 
+        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # WRAP SOCKET 
+        SSL_CONTEXT = ssl.create_default_context()
+        secure_socket = SSL_CONTEXT.wrap_socket(mysocket, server_hostname=self.server)
+
+        # SET AS CRAWLER SOCKET
+        self.secure_socket = secure_socket
+
+        # CONNECT 
+        self.secure_socket.connect((self.server, self.port))
+
+    # SEND GET REQUEST 
+    def send_get_request(self, url):
+        if not isinstance(url, str):
+            sys.exit(f'TypeError: send_get_request expects a string, not {type(url)}')
+
+        self.current_url = url
+        self.visited += self.current_url,
+
+        request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
+        
+        print("Request to %s:%d\n" % (self.server, self.port))
+        print(request)
+
+        self.secure_socket.send(request.encode('ascii'))
+        self.receive_response()
+
+    # SEND POST REQUEST (expects fields as a dict)
+    def send_post_request(self, path, fields):
+        if not isinstance(path, str):
+            sys.exit(f'TypeError: send_post_request expects a string for path, not {type(path)}')
+        if not isinstance(fields, dict):
+            sys.exit(f'TypeError: send_post_request expects a dict for fields, not {type(fields)}')
+
+        body = ''
+
+        for k in fields:
+            body += (k + '=' + fields[k] + '&') 
+        body = body[:-1] + '\r\n\r\n'
+
+        content_length = len(body.encode('ascii'))
+
+        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
+
+        print("Request to %s:%d\n" % (self.server, self.port))
+        print(request)
+
+        self.secure_socket.send(request.encode('ascii'))
+        return self.receive_response()
+
+    # LOG INTO FAKEBOOK
+    def log_in(self):
+        self.send_get_request('/accounts/login/')
+        self.send_post_request(
+            '/accounts/login/', 
+            {'username':self.username, 
+            'password':self.password,
+            'csrfmiddlewaretoken':self.csrfmiddlewaretoken,
+            'next':''})
+
+    # RECEIVE AND HANDLE RESPONSE 
+    def receive_response(self):
+        buf_size = 1024
+        response = ''
+
+        # RECEIVE HEADERS
+        while not '\r\n\r\n' in response:
+            try:
+                data = self.secure_socket.recv(buf_size)
+                response += data.decode('ascii')
+            except socket.error:
+                print("SOCKET ERROR!")
+                exit()
+        
+        # SET HEADERS
+        self.handle_response_headers(response)
+
+        # SET BUFFER SIZE TO ADVERTISED CONTENT-LENGTH
+        buf_size = int(self.current_headers['Content-Length'])
+
+        # TODO this is just here to help with debugging when we encounter 503
+        # if buf_size == 200:
+        #     data = self.secure_socket.recv(buf_size)
+        #     response += data.decode('ascii')
+        #     print(response)
+        #     exit()
+
+        # ONLY HANDLE BODY IF THE CONTENT-LENGTH > 0 (TODO when buffer == 200, it crashes -->> THIS IS A 503)
+        if buf_size > 0:
+            # RECEIVE BODY USING CONTENT-LENGTH AS BUFFER SIZE
+            try:
+                data = self.secure_socket.recv(buf_size)
+                response += data.decode('ascii')
+            except socket.error:
+                print("SOCKET ERROR!")
+                exit()
+
+            # SET BODY
+            try:
+                self.handle_response_body(response)
+            except:
+                print("ERROR:\n")
+                print(data)
+
+        print("Response:\n%s" % response)
+        self.handle_status()
+    
+    def handle_response_headers(self, response):
+        headers = response.split('\r\n\n\n')[0].split('\r\n')
+        self.current_status = headers[0]
+        self.set_headers(headers)
+
+    def handle_response_body(self, response):
+        self.current_body = response.split('\r\n\n\n')[1]
+
+    def handle_status(self):
+        if self.current_status == BAD_REQUEST:
+            self.handle_BAD_REQUEST()
+
+        elif self.current_status == OK:
+            self.handle_OK()
+            
+        elif self.current_status == FOUND:
+            self.handle_FOUND()
+
+        elif self.current_status in (FORBIDDEN, NOT_FOUND):
+            self.handle_BAD_URL()
+
+        elif self.current_status == SERVICE_UNAVAILABLE:
+            self.handle_SERVICE_UNAVAILABLE()
+
+    def handle_BAD_REQUEST(self):
+        print('HTTP/1.1 400 Bad Request', file=sys.stderr)
+        exit()
+    
+    def handle_OK(self):
+        self.parse_html()
+
+        if 'sessionid' in self.current_headers['Cookies'].keys():
+            self.sessionID = self.current_headers['Cookies']['sessionid']
+        if 'csrftoken' in self.current_headers['Cookies'].keys():
+            self.csrftoken = self.current_headers['Cookies']['csrftoken']
+
+    def handle_FOUND(self):
+        # try request again with new URL in Location header (continue parsing)
+        if 'sessionid' in self.current_headers['Cookies'].keys():
+            self.sessionID = self.current_headers['Cookies']['sessionid']
+        if 'csrftoken' in self.current_headers['Cookies'].keys():
+            self.csrftoken = self.current_headers['Cookies']['csrftoken']
+        location = self.current_headers['Location']
+        
+        # TODO: this is a quick fix 
+        if location in self.frontier: 
+            self.frontier.remove(location)
+
+        self.send_get_request(location)
+
+    def handle_BAD_URL(self):
+        # abandon the URL that generated the response code (never visit again)
+        print()
+
+    def handle_SERVICE_UNAVAILABLE(self):
+        # retry request for the URL until successful (store a current URL? pass URL?)
+        print()
+
+    def set_headers(self, headers):
+        self.current_headers['Cookies'] = {}
+        for h in headers:
+            # current_reponse needs unique keys, so store each 'Set-Cookie' header in 
+            # a 'Cookies' dictionary 
+            if 'Set-Cookie: ' in h:
+                # Isolate cookie value in 'Set-Cookie: ' header
+                cookie = h.replace('Set-Cookie: ','')
+                # Desired cookie value is bounded by '<cookie_type>=' and '; <attributes>'
+                # so split by ';' to isolate '<cookie_type>=<cookie_value>' 
+                # then split by '=' to get pair ['<cookie_type>','<cookie_value>']
+                pair = cookie.split(';')[0].split('=')
+                # Set the cookie key and value in the cookies dictionary in current_response 
+                self.current_headers['Cookies'][pair[0]] = pair[1]
+            elif ':' in h:
+                # Split each header => Header: value --> ['Header','value']
+                pair = h.split(': ')
+                # Set current_response header key and associated value from pair above
+                self.current_headers[pair[0]] = pair[1]
+
+    def parse_html(self):
+        parser = MyHTMLParser()
+        parser.feed(self.current_body)
+        if parser.data['csrf']:
+            self.csrfmiddlewaretoken = parser.data['csrf']
+        if parser.data['flags']:
+            for f in parser.data['flags']:
+                if f not in self.flags:
+                    self.flags += f,
+        if parser.data['urls']:
+            for u in parser.data['urls']:
+                if u not in self.visited and self.is_valid_target(u):
+                    print("ADD TO FRONTIER ::::: " + u)
+                    self.frontier.append(u)
+
+    def is_valid_target(self, url):
+        return url.startswith('/') or url.startswith('https://proj5.3700.network/')
+
+    def run(self):
+        self.open_secure_socket()
+        self.log_in()
+        
+        # PROBLEM: sometimes we get no body in an OK response (when to add to visted? when to re-explore?)
+        # PROBLEM: sometimes it doesn't start correctly (we get a csrf error or can't get past login)
+        while len(self.frontier) > 0:
+            self.send_get_request(self.frontier.pop(0))
+            print(self.visited)
+            print(self.flags)
+        
+
+class MyHTMLParser(HTMLParser):
+    def __init__(self):
+        HTMLParser.__init__(self)
+        self.data = {
+            'csrf':'',
+            'urls':[],
+            'flags':[]
+        }
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'input':
+            tag_dict = dict(attrs)
+            if 'csrfmiddlewaretoken' in tag_dict.values():
+                self.data['csrf'] = tag_dict['value']
+        
+        if tag == 'a':
+            tag_dict = dict(attrs)
+            if 'href' in tag_dict.keys():
+                self.data['urls'] += tag_dict['href'],
+
+    def handle_data(self, data):
+        if data.startswith('FLAG: '):
+            self.data['flags'] += data.replace('FLAG: ',''),
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='crawl Fakebook')
+    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
+    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
+    parser.add_argument('username', type=str, help="The username to use")
+    parser.add_argument('password', type=str, help="The password to use")
+    args = parser.parse_args()
+    sender = Crawler(args)
+    sender.run()
