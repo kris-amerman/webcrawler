@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import sys, select, argparse, socket, ssl
-from queue import Queue
 from html.parser import HTMLParser
 
 DEFAULT_SERVER = "proj5.3700.network"
@@ -122,7 +121,7 @@ class Crawler:
                 data = self.secure_socket.recv(buf_size)
                 response += data.decode('ascii')
             except socket.error:
-                print("SOCKET ERROR!")
+                print(socket.error)
                 exit()
         
         # SET HEADERS
@@ -138,22 +137,18 @@ class Crawler:
         #     print(response)
         #     exit()
 
-        # ONLY HANDLE BODY IF THE CONTENT-LENGTH > 0 (TODO when buffer == 200, it crashes -->> THIS IS A 503)
+        # ONLY HANDLE BODY IF THE CONTENT-LENGTH > 0 (TODO when buffer == 200 it crashes -->> THIS IS A 503)
         if buf_size > 0:
             # RECEIVE BODY USING CONTENT-LENGTH AS BUFFER SIZE
             try:
                 data = self.secure_socket.recv(buf_size)
                 response += data.decode('ascii')
             except socket.error:
-                print("SOCKET ERROR!")
+                print(socket.error)
                 exit()
 
             # SET BODY
-            try:
-                self.handle_response_body(response)
-            except:
-                print("ERROR:\n")
-                print(data)
+            self.handle_response_body(response)
 
         print("Response:\n%s" % response)
         self.handle_status()
@@ -228,7 +223,7 @@ class Crawler:
                 # so split by ';' to isolate '<cookie_type>=<cookie_value>' 
                 # then split by '=' to get pair ['<cookie_type>','<cookie_value>']
                 pair = cookie.split(';')[0].split('=')
-                # Set the cookie key and value in the cookies dictionary in current_response 
+                # Set the cookie key and value in the cookies dictionary in current_headers 
                 self.current_headers['Cookies'][pair[0]] = pair[1]
             elif ':' in h:
                 # Split each header => Header: value --> ['Header','value']
