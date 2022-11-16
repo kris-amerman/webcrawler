@@ -54,6 +54,7 @@ class Crawler:
         # WRAP SOCKET 
         SSL_CONTEXT = ssl.create_default_context()
         secure_socket = SSL_CONTEXT.wrap_socket(mysocket, server_hostname=self.server)
+        secure_socket.settimeout(1)
 
         # SET AS CRAWLER SOCKET
         self.secure_socket = secure_socket
@@ -112,6 +113,8 @@ class Crawler:
 
     # RECEIVE AND HANDLE RESPONSE 
     def receive_response(self):
+        print("RECEIVING...\n")
+        
         buf_size = 1024
         response = ''
 
@@ -121,21 +124,25 @@ class Crawler:
                 data = self.secure_socket.recv(buf_size)
                 response += data.decode('ascii')
             except socket.error:
-                print(socket.error)
+                print("ERROR: " + str(socket.error))
                 exit()
-        
+        print("HEADERS RECEIVED.\n")
+
         # SET HEADERS
         self.handle_response_headers(response)
+        print("HEADERS SET.\n")
 
         # SET BUFFER SIZE TO ADVERTISED CONTENT-LENGTH
         buf_size = int(self.current_headers['Content-Length'])
 
+        print(f"RECEIVING BUFFER SIZE: {buf_size}...\n")
+
         # TODO this is just here to help with debugging when we encounter 503
-        # if buf_size == 200:
-        #     data = self.secure_socket.recv(buf_size)
-        #     response += data.decode('ascii')
-        #     print(response)
-        #     exit()
+        if buf_size == 200:
+            data = self.secure_socket.recv(buf_size)
+            response += data.decode('ascii')
+            print(response)
+            exit()
 
         # ONLY HANDLE BODY IF THE CONTENT-LENGTH > 0 (TODO when buffer == 200 it crashes -->> THIS IS A 503)
         if buf_size > 0:
@@ -147,8 +154,11 @@ class Crawler:
                 print(socket.error)
                 exit()
 
+            print("RECEIVED BODY.\n")
+
             # SET BODY
             self.handle_response_body(response)
+            print("HANDLED BODY.\n")
 
         print("Response:\n%s" % response)
         self.handle_status()
@@ -159,7 +169,10 @@ class Crawler:
         self.set_headers(headers)
 
     def handle_response_body(self, response):
-        self.current_body = response.split('\r\n\n\n')[1]
+        try:
+            self.current_body = response.split('\r\n\n\n')[1]
+        except:
+            print(response)
 
     def handle_status(self):
         if self.current_status == BAD_REQUEST:
@@ -252,9 +265,7 @@ class Crawler:
     def run(self):
         self.open_secure_socket()
         self.log_in()
-        
-        # PROBLEM: sometimes we get no body in an OK response (when to add to visted? when to re-explore?)
-        # PROBLEM: sometimes it doesn't start correctly (we get a csrf error or can't get past login)
+       
         while len(self.frontier) > 0:
             self.send_get_request(self.frontier.pop(0))
             print(self.visited)
