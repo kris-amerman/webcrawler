@@ -277,10 +277,10 @@ class Crawler:
             print('\nNumber of pages visited: ' + str(len(self.visited)), file=sys.stderr)
             print('Flags: ' + str(self.flags) + "\n", file=sys.stderr)
 
-        print("----------------- Metrics ----------------")
+        print("----------------- Metrics ----------------", file=sys.stderr)
         print("Flags: " + str(self.flags), file=sys.stderr)
         print('Final number of pages visited: ' + str(len(self.visited)), file=sys.stderr)
-        print("------------------------------------------")
+        print("------------------------------------------", file=sys.stderr)
 
         for f in self.flags:
             print(f, file=sys.stdout)
