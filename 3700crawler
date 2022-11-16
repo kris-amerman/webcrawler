@@ -6,7 +6,6 @@ from html.parser import HTMLParser
 # CONSTANTS 
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
-RETRY_LIMIT = 10
 
 # STATUS CODES
 OK = 'HTTP/1.1 200 OK'
@@ -39,8 +38,6 @@ class Crawler:
         self.current_status = ''
         self.current_headers = {}
         self.current_body = ''
-
-        self.retry_counter = 0
     
     # Open and connect over TLS TCP socket
     def open_secure_socket(self):
@@ -63,9 +60,8 @@ class Crawler:
         if not isinstance(url, str):
             sys.exit(f'TypeError: send_get_request expects a string, not {type(url)}')
         
-        # Set the current url to explore and add it to visited
+        # Set the current url 
         self.current_url = url
-        self.visited += self.current_url,
 
         # Format the request
         request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
@@ -177,11 +173,11 @@ class Crawler:
 
     # The program can receive the rest of the body and start the parsing cascade
     def handle_OK(self):
+        # We can visit the current URL 
+        self.visited += self.current_url,
+
         # Receive the rest of the body
         self.receive_body(int(self.current_headers['Content-Length']))
-
-        # We can reset the retry counter once the response comes back as OK
-        self.retry_counter = 0
 
         self.parse_html()
 
@@ -204,19 +200,13 @@ class Crawler:
 
         # Extract Location
         location = self.current_headers['Location']
-        
-        # Remove if it already exists in the frontier (just in case)
-        if location in self.frontier: 
-            self.frontier.remove(location)
 
         # Try GET again with Location
         self.send_get_request(location)
 
-    # Retry request for the URL until successful; quit after exceeding the retry_counter threshold
+    # Retry request for the URL until successful
     def handle_SERVICE_UNAVAILABLE(self):
-        if self.retry_counter < RETRY_LIMIT:
-            self.receive_headers(self)
-            self.retry_counter += 1
+        self.send_get_request(self.current_url)
 
     # Parse incoming headers and store them
     def set_headers(self, headers):
@@ -274,10 +264,12 @@ class Crawler:
             if len(self.flags) == 5: break
             next = self.frontier.pop(0)
             self.send_get_request(next)
+            print("Size of frontier: " + str(len(self.frontier)), file=sys.stderr)
             print('\nNumber of pages visited: ' + str(len(self.visited)), file=sys.stderr)
             print('Flags: ' + str(self.flags) + "\n", file=sys.stderr)
 
         print("----------------- Metrics ----------------", file=sys.stderr)
+        print("Size of frontier: " + str(len(self.frontier)))
         print("Flags: " + str(self.flags), file=sys.stderr)
         print('Final number of pages visited: ' + str(len(self.visited)), file=sys.stderr)
         print("------------------------------------------", file=sys.stderr)
