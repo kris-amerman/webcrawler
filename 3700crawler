@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 
-import sys, select, argparse, socket, ssl, zlib, gzip
+import sys, select, argparse, socket, ssl
 from html.parser import HTMLParser
 
-# CONSTANTS
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
-RETRY_LIMIT = 10
+
+# TODO: get rid of duplicate flags (don't revisit pages -- fix loops)
+# TODO: clean up code (storing current response; open up possibility for multithreading)
+# TODO: fix request headers (keep-alive, etc.)
+# TODO: fix print to terminal (stdout flags only)
+# TODO: try not to hard code parsing 
+# TODO: add error-checking
+# TODO: special login GET request --> dynamic requests
+# TODO: handle other response codes
 
 # STATUS CODES
 OK = 'HTTP/1.1 200 OK'
@@ -16,6 +23,7 @@ FORBIDDEN = 'HTTP/1.1 403 Forbidden'
 NOT_FOUND = 'HTTP/1.1 404 Not Found'
 SERVICE_UNAVAILABLE = 'HTTP/1.1 503 Service Unavailable'
 
+RETRY_LIMIT = 10
 
 class Crawler:
     
@@ -66,7 +74,7 @@ class Crawler:
         self.current_url = url
         self.visited += self.current_url,
 
-        request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\naccept-encoding: gzip\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
+        request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
         
         print("Request to %s:%d\n" % (self.server, self.port))
         print(request)
@@ -89,7 +97,7 @@ class Crawler:
 
         content_length = len(body.encode('ascii'))
 
-        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\naccept-encoding: gzip\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
+        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
 
         print("Request to %s:%d\n" % (self.server, self.port))
         print(request)
@@ -112,29 +120,18 @@ class Crawler:
         
         buf_size = 1024
         response = ''
-        data = b''
 
         # RECEIVE HEADERS
-        while not b'\r\n\r\n' in data:
+        while not '\r\n\r\n' in response:
             try:
                 data = self.secure_socket.recv(buf_size)
-                if data.startswith(b'\x1f'):
-                    self.current_body = data
-                else:
-                    print(data)
-                    # Only get the headers
-                    data_split = data.split(b'\r\n\r\n')
-                    headers = data_split[0]
-                    # If some of the body was received, store it for later
-                    if len(data_split) == 2:
-                        body_segment = data_split[1]
-                        self.current_body = body_segment
-                    
-                    response += headers.decode('ascii')
+                response += data.decode('ascii')
             except socket.error:
-                print("ERROR READING HEADER: " + str(socket.error))
+                print("ERROR: " + str(socket.error))
                 exit()
+        
         print("HEADERS RECEIVED.\n")
+
 
         # SET HEADERS
         self.handle_response_headers(response)
@@ -142,19 +139,17 @@ class Crawler:
         # HANDLE STATUS
         self.handle_status()
 
-    # Receive and handle the body
     def receive_body(self, buf_size):
-        print(f"RECEIVING BUFFER SIZE: {buf_size} ...\n")
+        print(f"RECEIVING BUFFER SIZE: {buf_size}...\n")
         
         response = ''
 
-        # If some of the body has already been read (gzip header) add it to data
-        data = self.current_body
-
-        # Receive the rest of the body
-        data += self.secure_socket.recv(buf_size)
-        decomp_data = gzip.decompress(data)
-        response += decomp_data.decode('ascii')
+        try:
+            data = self.secure_socket.recv(buf_size)
+            response += data.decode('ascii')
+        except socket.error:
+            print(socket.error)
+            exit()
 
         print("RECEIVED BODY.\n")
 
@@ -294,15 +289,13 @@ class Crawler:
             if len(set(self.visited)) != len(self.visited):
                 print("####### DUPLICATES #######")
                 exit()
-            print("VISITED: " + str(len(self.visited)))
-            print("FLAGS: " + str(self.flags))
 
-        print("--------------- Metrics ------------------")
-        print(self.visited)
-        print('Number of pages visited: ' + str(len(self.visited)))
-        print('\nFlags: ')
-        print(self.flags)
-        print("-----------------------------------------")
+            print("---------------------------------")
+            print(self.visited)
+            print(self.flags)
+
+            print('Number of pages visited: ' + str(len(self.visited)))
+            print("---------------------------------")
         
 
 class MyHTMLParser(HTMLParser):
