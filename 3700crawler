@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
 
-import sys, select, argparse, socket, ssl
+import sys, select, argparse, socket, ssl, zlib, gzip
 from html.parser import HTMLParser
 
+# CONSTANTS
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
-
-# TODO: get rid of duplicate flags (don't revisit pages -- fix loops)
-# TODO: clean up code (storing current response; open up possibility for multithreading)
-# TODO: fix request headers (keep-alive, etc.)
-# TODO: fix print to terminal (stdout flags only)
-# TODO: try not to hard code parsing 
-# TODO: add error-checking
-# TODO: special login GET request --> dynamic requests
-# TODO: handle other response codes
+RETRY_LIMIT = 10
 
 # STATUS CODES
 OK = 'HTTP/1.1 200 OK'
@@ -22,6 +15,7 @@ FOUND = 'HTTP/1.1 302 Found'
 FORBIDDEN = 'HTTP/1.1 403 Forbidden'
 NOT_FOUND = 'HTTP/1.1 404 Not Found'
 SERVICE_UNAVAILABLE = 'HTTP/1.1 503 Service Unavailable'
+
 
 class Crawler:
     
@@ -45,6 +39,8 @@ class Crawler:
         self.current_status = ''
         self.current_headers = {}
         self.current_body = ''
+
+        self.retry_counter = 0
     
     # OPEN AND CONNECT OVER TLS TCP SOCKET
     def open_secure_socket(self):
@@ -54,7 +50,7 @@ class Crawler:
         # WRAP SOCKET 
         SSL_CONTEXT = ssl.create_default_context()
         secure_socket = SSL_CONTEXT.wrap_socket(mysocket, server_hostname=self.server)
-        secure_socket.settimeout(1)
+        secure_socket.settimeout(3)
 
         # SET AS CRAWLER SOCKET
         self.secure_socket = secure_socket
@@ -70,13 +66,13 @@ class Crawler:
         self.current_url = url
         self.visited += self.current_url,
 
-        request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
+        request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\naccept-encoding: gzip\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
         
         print("Request to %s:%d\n" % (self.server, self.port))
         print(request)
 
         self.secure_socket.send(request.encode('ascii'))
-        self.receive_response()
+        self.receive_headers()
 
     # SEND POST REQUEST (expects fields as a dict)
     def send_post_request(self, path, fields):
@@ -93,13 +89,13 @@ class Crawler:
 
         content_length = len(body.encode('ascii'))
 
-        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
+        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\naccept-encoding: gzip\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
 
         print("Request to %s:%d\n" % (self.server, self.port))
         print(request)
 
         self.secure_socket.send(request.encode('ascii'))
-        return self.receive_response()
+        return self.receive_headers()
 
     # LOG INTO FAKEBOOK
     def log_in(self):
@@ -111,90 +107,98 @@ class Crawler:
             'csrfmiddlewaretoken':self.csrfmiddlewaretoken,
             'next':''})
 
-    # RECEIVE AND HANDLE RESPONSE 
-    def receive_response(self):
+    def receive_headers(self):
         print("RECEIVING...\n")
         
         buf_size = 1024
         response = ''
+        data = b''
 
         # RECEIVE HEADERS
-        while not '\r\n\r\n' in response:
+        while not b'\r\n\r\n' in data:
             try:
                 data = self.secure_socket.recv(buf_size)
-                response += data.decode('ascii')
+                if data.startswith(b'\x1f'):
+                    self.current_body = data
+                else:
+                    print(data)
+                    # Only get the headers
+                    data_split = data.split(b'\r\n\r\n')
+                    headers = data_split[0]
+                    # If some of the body was received, store it for later
+                    if len(data_split) == 2:
+                        body_segment = data_split[1]
+                        self.current_body = body_segment
+                    
+                    response += headers.decode('ascii')
             except socket.error:
-                print("ERROR: " + str(socket.error))
+                print("ERROR READING HEADER: " + str(socket.error))
                 exit()
         print("HEADERS RECEIVED.\n")
 
         # SET HEADERS
         self.handle_response_headers(response)
-        print("HEADERS SET.\n")
 
-        # SET BUFFER SIZE TO ADVERTISED CONTENT-LENGTH
-        buf_size = int(self.current_headers['Content-Length'])
-
-        print(f"RECEIVING BUFFER SIZE: {buf_size}...\n")
-
-        # TODO this is just here to help with debugging when we encounter 503
-        if buf_size == 200:
-            data = self.secure_socket.recv(buf_size)
-            response += data.decode('ascii')
-            print(response)
-            exit()
-
-        # ONLY HANDLE BODY IF THE CONTENT-LENGTH > 0 (TODO when buffer == 200 it crashes -->> THIS IS A 503)
-        if buf_size > 0:
-            # RECEIVE BODY USING CONTENT-LENGTH AS BUFFER SIZE
-            try:
-                data = self.secure_socket.recv(buf_size)
-                response += data.decode('ascii')
-            except socket.error:
-                print(socket.error)
-                exit()
-
-            print("RECEIVED BODY.\n")
-
-            # SET BODY
-            self.handle_response_body(response)
-            print("HANDLED BODY.\n")
-
-        print("Response:\n%s" % response)
+        # HANDLE STATUS
         self.handle_status()
-    
+
+    # Receive and handle the body
+    def receive_body(self, buf_size):
+        print(f"RECEIVING BUFFER SIZE: {buf_size} ...\n")
+        
+        response = ''
+
+        # If some of the body has already been read (gzip header) add it to data
+        data = self.current_body
+
+        # Receive the rest of the body
+        data += self.secure_socket.recv(buf_size)
+        decomp_data = gzip.decompress(data)
+        response += decomp_data.decode('ascii')
+
+        print("RECEIVED BODY.\n")
+
+        print("SETTING BODY TO: ")
+        print(response)
+
+        # SET BODY
+        self.current_body = response 
+
     def handle_response_headers(self, response):
         headers = response.split('\r\n\n\n')[0].split('\r\n')
         self.current_status = headers[0]
         self.set_headers(headers)
 
-    def handle_response_body(self, response):
-        try:
-            self.current_body = response.split('\r\n\n\n')[1]
-        except:
-            print(response)
-
     def handle_status(self):
         if self.current_status == BAD_REQUEST:
+            print("BAD REQUEST")
             self.handle_BAD_REQUEST()
 
         elif self.current_status == OK:
+            print("OK")
             self.handle_OK()
             
         elif self.current_status == FOUND:
+            print("FOUND")
             self.handle_FOUND()
 
         elif self.current_status in (FORBIDDEN, NOT_FOUND):
+            print("BAD URL")
             self.handle_BAD_URL()
 
         elif self.current_status == SERVICE_UNAVAILABLE:
+            print("SERVICE UNAVAILABLE")
             self.handle_SERVICE_UNAVAILABLE()
 
+    # TODO print some error
     def handle_BAD_REQUEST(self):
         print('HTTP/1.1 400 Bad Request', file=sys.stderr)
         exit()
-    
+
     def handle_OK(self):
+        self.receive_body(int(self.current_headers['Content-Length']))
+
+        self.retry_counter = 0
         self.parse_html()
 
         if 'sessionid' in self.current_headers['Cookies'].keys():
@@ -203,6 +207,8 @@ class Crawler:
             self.csrftoken = self.current_headers['Cookies']['csrftoken']
 
     def handle_FOUND(self):
+        self.receive_body(int(self.current_headers['Content-Length']))
+
         # try request again with new URL in Location header (continue parsing)
         if 'sessionid' in self.current_headers['Cookies'].keys():
             self.sessionID = self.current_headers['Cookies']['sessionid']
@@ -222,7 +228,11 @@ class Crawler:
 
     def handle_SERVICE_UNAVAILABLE(self):
         # retry request for the URL until successful (store a current URL? pass URL?)
-        print()
+        print("SERVICE UNAVAILABLE ... RETRYING\n*\n*\n*\n*\n*")
+        
+        if self.retry_counter < RETRY_LIMIT:
+            self.receive_headers(self)
+            self.retry_counter += 1
 
     def set_headers(self, headers):
         self.current_headers['Cookies'] = {}
@@ -255,21 +265,44 @@ class Crawler:
                     self.flags += f,
         if parser.data['urls']:
             for u in parser.data['urls']:
-                if u not in self.visited and self.is_valid_target(u):
+                u = self.truncate_target(u)
+                if (u not in self.visited) and (u not in self.frontier) and (len(u) > 0):
                     print("ADD TO FRONTIER ::::: " + u)
                     self.frontier.append(u)
 
-    def is_valid_target(self, url):
-        return url.startswith('/') or url.startswith('https://proj5.3700.network/')
+    def truncate_target(self, url):
+        if url.startswith('/'):
+            return url
+        elif url.startswith('https://proj5.3700.network/'):
+            return url.replace('https://proj5.3700.network','')
+        else:
+            return ''
 
     def run(self):
         self.open_secure_socket()
         self.log_in()
        
-        while len(self.frontier) > 0:
-            self.send_get_request(self.frontier.pop(0))
-            print(self.visited)
-            print(self.flags)
+        while (len(self.frontier) > 0) or (len(self.flags) != 5) :
+            next = self.frontier.pop(0)
+            if next in self.visited:
+                print("####### IN VISITED #######")
+                print(next)
+                exit()
+
+            self.send_get_request(next)
+            
+            if len(set(self.visited)) != len(self.visited):
+                print("####### DUPLICATES #######")
+                exit()
+            print("VISITED: " + str(len(self.visited)))
+            print("FLAGS: " + str(self.flags))
+
+        print("--------------- Metrics ------------------")
+        print(self.visited)
+        print('Number of pages visited: ' + str(len(self.visited)))
+        print('\nFlags: ')
+        print(self.flags)
+        print("-----------------------------------------")
         
 
 class MyHTMLParser(HTMLParser):
