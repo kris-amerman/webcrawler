@@ -66,8 +66,8 @@ class Crawler:
         # Format the request
         request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
         
-        print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
-        print(request, file=sys.stderr)
+        # print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
+        # print(request, file=sys.stderr)
 
         # Send the request
         self.secure_socket.send(request.encode('ascii'))
@@ -89,8 +89,8 @@ class Crawler:
         # Format the request
         request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
 
-        print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
-        print(request, file=sys.stderr)
+        # print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
+        # print(request, file=sys.stderr)
 
         # Send the request 
         self.secure_socket.send(request.encode('ascii'))
@@ -126,7 +126,7 @@ class Crawler:
                     self.current_body = data_split[1].decode('ascii')
                 response += headers.decode('ascii')
             except socket.error:
-                print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
+                # print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
                 exit()
 
         # Set status and headers
@@ -145,7 +145,7 @@ class Crawler:
             data = self.secure_socket.recv(buf_size)
             response += data.decode('ascii')
         except socket.error:
-            print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
+            # print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
             exit()
 
         # Set the body (if some of it was already received, just append)
@@ -168,7 +168,7 @@ class Crawler:
 
     # If a bad request is encountered, something bad happened in the client -- exit
     def handle_BAD_REQUEST(self):
-        print('HTTP/1.1 400 Bad Request', file=sys.stderr)
+        # print('HTTP/1.1 400 Bad Request', file=sys.stderr)
         exit()
 
     # The program can receive the rest of the body and start the parsing cascade
@@ -264,15 +264,15 @@ class Crawler:
             if len(self.flags) == 5: break
             next = self.frontier.pop(0)
             self.send_get_request(next)
-            print("Size of frontier: " + str(len(self.frontier)), file=sys.stderr)
-            print('\nNumber of pages visited: ' + str(len(self.visited)), file=sys.stderr)
-            print('Flags: ' + str(self.flags) + "\n", file=sys.stderr)
+        #     print("Size of frontier: " + str(len(self.frontier)), file=sys.stderr)
+        #     print('\nNumber of pages visited: ' + str(len(self.visited)), file=sys.stderr)
+        #     print('Flags: ' + str(self.flags) + "\n", file=sys.stderr)
 
-        print("----------------- Metrics ----------------", file=sys.stderr)
-        print("Size of frontier: " + str(len(self.frontier)))
-        print("Flags: " + str(self.flags), file=sys.stderr)
-        print('Final number of pages visited: ' + str(len(self.visited)), file=sys.stderr)
-        print("------------------------------------------", file=sys.stderr)
+        # print("----------------- Metrics ----------------", file=sys.stderr)
+        # print("Size of frontier: " + str(len(self.frontier)))
+        # print("Flags: " + str(self.flags), file=sys.stderr)
+        # print('Final number of pages visited: ' + str(len(self.visited)), file=sys.stderr)
+        # print("------------------------------------------", file=sys.stderr)
 
         for f in self.flags:
             print(f, file=sys.stdout)
