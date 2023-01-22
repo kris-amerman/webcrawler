@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
-import sys, select, argparse, socket, ssl
+import sys
+import select
+import argparse
+import socket
+import ssl
 from html.parser import HTMLParser
 
-# CONSTANTS 
+# CONSTANTS
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
 
@@ -17,7 +21,7 @@ SERVICE_UNAVAILABLE = 'HTTP/1.1 503 Service Unavailable'
 
 
 class Crawler:
-    
+
     # Crawl with one URL and response at a time
     def __init__(self, args):
         self.server = args.server
@@ -38,36 +42,35 @@ class Crawler:
         self.current_status = ''
         self.current_headers = {}
         self.current_body = ''
-    
+
     # Open and connect over TLS TCP socket
     def open_secure_socket(self):
-        # Create socket 
+        # Create socket
         mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         # Wrap socket and set timeout
         SSL_CONTEXT = ssl.create_default_context()
-        secure_socket = SSL_CONTEXT.wrap_socket(mysocket, server_hostname=self.server)
+        secure_socket = SSL_CONTEXT.wrap_socket(
+            mysocket, server_hostname=self.server)
         secure_socket.settimeout(3)
 
         # Set as crawler socket
         self.secure_socket = secure_socket
 
-        # Connect 
+        # Connect
         self.secure_socket.connect((self.server, self.port))
 
     # Format and send a GET request with the given URL
     def send_get_request(self, url):
         if not isinstance(url, str):
-            sys.exit(f'TypeError: send_get_request expects a string, not {type(url)}')
-        
-        # Set the current url 
+            sys.exit(
+                f'TypeError: send_get_request expects a string, not {type(url)}')
+
+        # Set the current url
         self.current_url = url
 
         # Format the request
         request = f"GET {self.current_url} HTTP/1.1\r\nHost: {self.server}\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n"
-        
-        # print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
-        # print(request, file=sys.stderr)
 
         # Send the request
         self.secure_socket.send(request.encode('ascii'))
@@ -80,19 +83,16 @@ class Crawler:
         # Build the payload
         body = ''
         for k in fields:
-            body += (k + '=' + fields[k] + '&') 
+            body += (k + '=' + fields[k] + '&')
         body = body[:-1] + '\r\n\r\n'
 
         # Calculate the content length
         content_length = len(body.encode('ascii'))
 
         # Format the request
-        request =  f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
+        request = f"POST {path} HTTP/1.1\r\nHost: {self.server}\r\ncontent-length: {content_length}\r\ncontent-type: application/x-www-form-urlencoded\r\ncookie: csrftoken={self.csrftoken}; sessionid={self.sessionID}\r\n\r\n" + body
 
-        # print("Request to %s:%d\n" % (self.server, self.port), file=sys.stderr)
-        # print(request, file=sys.stderr)
-
-        # Send the request 
+        # Send the request
         self.secure_socket.send(request.encode('ascii'))
 
         # Receive the response and start the parsing cascade
@@ -102,11 +102,11 @@ class Crawler:
     def log_in(self):
         self.send_get_request('/accounts/login/')
         self.send_post_request(
-            '/accounts/login/', 
-            {'username':self.username, 
-            'password':self.password,
-            'csrfmiddlewaretoken':self.csrfmiddlewaretoken,
-            'next':''})
+            '/accounts/login/',
+            {'username': self.username,
+             'password': self.password,
+             'csrfmiddlewaretoken': self.csrfmiddlewaretoken,
+             'next': ''})
 
     # Receive and process incoming headers
     def receive_headers(self):
@@ -126,7 +126,8 @@ class Crawler:
                     self.current_body = data_split[1].decode('ascii')
                 response += headers.decode('ascii')
             except socket.error:
-                # print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
+                print("ERROR in receive_headers: " +
+                      str(socket.error), file=sys.stderr)
                 exit()
 
         # Set status and headers
@@ -145,11 +146,12 @@ class Crawler:
             data = self.secure_socket.recv(buf_size)
             response += data.decode('ascii')
         except socket.error:
-            # print("ERROR in receive_headers: " + str(socket.error), file=sys.stderr)
+            print("ERROR in receive_headers: " +
+                  str(socket.error), file=sys.stderr)
             exit()
 
         # Set the body (if some of it was already received, just append)
-        self.current_body += response 
+        self.current_body += response
 
     # Determine how to proceed based on status
     # We've already eliminated the URLs for 404 and 403, so they've already been dealt with
@@ -159,7 +161,7 @@ class Crawler:
 
         elif self.current_status == OK:
             self.handle_OK()
-            
+
         elif self.current_status == FOUND:
             self.handle_FOUND()
 
@@ -168,12 +170,12 @@ class Crawler:
 
     # If a bad request is encountered, something bad happened in the client -- exit
     def handle_BAD_REQUEST(self):
-        # print('HTTP/1.1 400 Bad Request', file=sys.stderr)
+        print('HTTP/1.1 400 Bad Request', file=sys.stderr)
         exit()
 
     # The program can receive the rest of the body and start the parsing cascade
     def handle_OK(self):
-        # We can visit the current URL 
+        # We can visit the current URL
         self.visited += self.current_url,
 
         # Receive the rest of the body
@@ -212,16 +214,16 @@ class Crawler:
     def set_headers(self, headers):
         self.current_headers['Cookies'] = {}
         for h in headers:
-            # current_reponse needs unique keys, so store each 'Set-Cookie' header in 
-            # a 'Cookies' dictionary 
+            # current_reponse needs unique keys, so store each 'Set-Cookie' header in
+            # a 'Cookies' dictionary
             if 'Set-Cookie: ' in h:
                 # Isolate cookie value in 'Set-Cookie: ' header
-                cookie = h.replace('Set-Cookie: ','')
+                cookie = h.replace('Set-Cookie: ', '')
                 # Desired cookie value is bounded by '<cookie_type>=' and '; <attributes>'
-                # so split by ';' to isolate '<cookie_type>=<cookie_value>' 
+                # so split by ';' to isolate '<cookie_type>=<cookie_value>'
                 # then split by '=' to get pair ['<cookie_type>','<cookie_value>']
                 pair = cookie.split(';')[0].split('=')
-                # Set the cookie key and value in the cookies dictionary in current_headers 
+                # Set the cookie key and value in the cookies dictionary in current_headers
                 self.current_headers['Cookies'][pair[0]] = pair[1]
             elif ':' in h:
                 # Split each header => Header: value --> ['Header','value']
@@ -250,42 +252,34 @@ class Crawler:
         if url.startswith('/'):
             return url
         elif url.startswith('https://proj5.3700.network/'):
-            return url.replace('https://proj5.3700.network','')
+            return url.replace('https://proj5.3700.network', '')
         else:
             return ''
-
-
 
     def run(self):
         self.open_secure_socket()
         self.log_in()
-       
+
         while len(self.frontier) > 0:
-            if len(self.flags) == 5: break
+            if len(self.flags) == 5:
+                break
             next = self.frontier.pop(0)
             self.send_get_request(next)
-        #     print("Size of frontier: " + str(len(self.frontier)), file=sys.stderr)
-        #     print('\nNumber of pages visited: ' + str(len(self.visited)), file=sys.stderr)
-        #     print('Flags: ' + str(self.flags) + "\n", file=sys.stderr)
-
-        # print("----------------- Metrics ----------------", file=sys.stderr)
-        # print("Size of frontier: " + str(len(self.frontier)))
-        # print("Flags: " + str(self.flags), file=sys.stderr)
-        # print('Final number of pages visited: ' + str(len(self.visited)), file=sys.stderr)
-        # print("------------------------------------------", file=sys.stderr)
 
         for f in self.flags:
             print(f, file=sys.stdout)
-        
+
 # Custom HTML parser from HTMLParser
+
+
 class MyHTMLParser(HTMLParser):
     def __init__(self):
         HTMLParser.__init__(self)
         # Store relevant information
         self.data = {
-            'csrf':'',
-            'urls':[],
-            'flags':[]
+            'csrf': '',
+            'urls': [],
+            'flags': []
         }
 
     def handle_starttag(self, tag, attrs):
@@ -294,7 +288,7 @@ class MyHTMLParser(HTMLParser):
             # Extract csrfmiddlewaretoken
             if 'csrfmiddlewaretoken' in tag_dict.values():
                 self.data['csrf'] = tag_dict['value']
-        
+
         if tag == 'a':
             tag_dict = dict(attrs)
             # Extract urls
@@ -304,12 +298,15 @@ class MyHTMLParser(HTMLParser):
     def handle_data(self, data):
         if data.startswith('FLAG: '):
             # Extract flags
-            self.data['flags'] += data.replace('FLAG: ',''),
+            self.data['flags'] += data.replace('FLAG: ', ''),
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='crawl Fakebook')
-    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
-    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
+    parser.add_argument('-s', dest="server", type=str,
+                        default=DEFAULT_SERVER, help="The server to crawl")
+    parser.add_argument('-p', dest="port", type=int,
+                        default=DEFAULT_PORT, help="The port to use")
     parser.add_argument('username', type=str, help="The username to use")
     parser.add_argument('password', type=str, help="The password to use")
     args = parser.parse_args()
